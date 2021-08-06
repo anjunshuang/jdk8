@@ -891,6 +891,13 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
      * state).
      * @return true if successful
      */
+    /**
+     * addWorker 方法的主要作用是在线程池中创建一个线程并执行第一个参数传入的任务，
+     * 它的第二个参数是个布尔值，如果布尔值传入 true 代表增加线程时判断当前线程是否少于 corePoolSize，小于则增加新线程，大于等于则不增加；
+     * 同理，如果传入 false 代表增加线程时判断当前线程是否少于 maxPoolSize，小于则增加新线程，大于等于则不增加，
+     * 所以这里的布尔值的含义是以核心线程数为界限还是以最大线程数为界限进行是否新增线程的判断。
+     * addWorker() 方法如果返回 true 代表添加成功，如果返回 false 代表添加失败。
+     */
     private boolean addWorker(Runnable firstTask, boolean core) {
         retry:
         for (;;) {
@@ -1004,6 +1011,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
             mainLock.unlock();
         }
 
+        //向任意空闲线程发出中断信号。所有被阻塞的线程，最终都会被一个个唤醒，回收
         tryTerminate();
 
         int c = ctl.get();
@@ -1124,6 +1132,10 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         w.unlock(); // allow interrupts
         boolean completedAbruptly = true;
         try {
+            // 在这里，我们找到了最终的实现，通过取 Worker 的 firstTask 或者 getTask 方法从 workQueue 中取出了新任务，
+            // 并直接调用 Runnable 的 run 方法来执行任务，也就是如之前所说的，每个线程都始终在一个大循环中，
+            // 反复获取任务，然后执行任务，从而实现了线程的复用
+            //如果w.firstTask为空，那么就要调用getTask()去获取任务，也就是重新赋值
             while (task != null || (task = getTask()) != null) {
                 w.lock();
                 // If pool is stopping, ensure thread is interrupted;
@@ -1330,6 +1342,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
      * @throws NullPointerException if {@code command} is null
      */
     public void execute(Runnable command) {
+        // 判断 runnable 任务是否为 null
         if (command == null)
             throw new NullPointerException();
         /*
@@ -1353,18 +1366,36 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
          * and so reject the task.
          */
         int c = ctl.get();
+        //工作的线程数少于核心线程数
         if (workerCountOf(c) < corePoolSize) {
+            //true：表示核心数    false：表示最大线程数
+            //增加线程数：这里的一个 worker 就代表一个线程  true 成功，false 失败
             if (addWorker(command, true))
                 return;
             c = ctl.get();
         }
+        //工作线程数大于等于核心线程数了 或者 addWorker 失败了
+        //2.1：当前线程是否是运行状态，如果是 running状态，就将任务放到队列中
         if (isRunning(c) && workQueue.offer(command)) {
             int recheck = ctl.get();
+            //再次检查：如果线程池已经不处于 Running 状态，说明线程池被关闭，那么就移除刚刚添加到任务队列中的任务，并执行拒绝策略
+            //Q：为什么外面已经放入队列了，还要再检查一次呢？
+            //A： 如果任务可以成功排队，那么我们仍然需要仔细检查我们是否应该添加一个线程（因为现有线程可能自上次检查以来已死亡），
+            //    或者在进入此方法后，线程池可能关闭。因此，我们需要重新检查状态
             if (! isRunning(recheck) && remove(command))
                 reject(command);
+            //能进入这个 else 说明前面判断到线程池状态为 Running，那么当任务被添加进来之后就需要防止没有可执行线程的情况发生（比如之前的线程被回收了或意外终止了），
+            // 所以此时如果检查当前线程数为 0，也就是 workerCountOf**(recheck) == 0，那就执行 addWorker() 方法新建线程
+            //检查当前活跃的线程数，是否为0
             else if (workerCountOf(recheck) == 0)
                 addWorker(null, false);
         }
+        //2.2：当前线程不是 running 状态，或者队列中已经放不下了
+        //说明线程池不是 Running 状态或线程数大于或等于核心线程数并且任务队列已经满了，根据规则，此时需要添加新线程，直到线程数达到“最大线程数”，
+        // 所以此时就会再次调用 addWorker 方法并将第二个参数传入 false，传入 false 代表增加线程时判断当前线程数是否少于 maxPoolSize，
+        // 小于则增加新线程，大于等于则不增加，也就是以 maxPoolSize 为上限创建新的 worker；addWorker 方法如果返回 true 代表添加成功，
+        // 如果返回 false 代表任务添加失败，说明当前线程数已经达到 maxPoolSize，然后执行拒绝策略 reject 方法。
+        // 如果执行到这里线程池的状态不是 Running，那么 addWorker 会失败并返回 false，所以也会执行拒绝策略 reject 方法
         else if (!addWorker(command, false))
             reject(command);
     }

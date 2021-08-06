@@ -432,12 +432,17 @@ public class CopyOnWriteArrayList<E>
      */
     public boolean add(E e) {
         final ReentrantLock lock = this.lock;
+        //加锁
         lock.lock();
         try {
+            //获取当前数组
             Object[] elements = getArray();
             int len = elements.length;
+            // 复制出一个新数组
             Object[] newElements = Arrays.copyOf(elements, len + 1);
+            // 添加时，将新元素添加到新数组中
             newElements[len] = e;
+            // 将volatile Object[] array 的指向替换成新数组
             setArray(newElements);
             return true;
         } finally {
